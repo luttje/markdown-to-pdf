@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1">
+  <title>Markdown to PDF</title>
+  <meta name="description"
+        content="Turn GitHub-flavored Markdown into a clean, paginated PDF, entirely in your browser.">
+  <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%84%3C/text%3E%3C/svg%3E">
+
+  <link rel="preconnect"
+        href="https://fonts.googleapis.com">
+  <link rel="preconnect"
+        href="https://fonts.gstatic.com"
+        crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,900;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">MD2PDF</span>
+      <span class="brand-name">Markdown to PDF</span>
+    </div>
+
+    <div class="view-toggle"
+         id="viewToggle"
+         role="tablist"
+         aria-label="Panel view">
+      <button class="view-btn is-active"
+              data-view="write"
+              role="tab"
+              aria-selected="true">Write</button>
+      <button class="view-btn"
+              data-view="preview"
+              role="tab"
+              aria-selected="false">Preview</button>
+    </div>
+
+    <div class="topbar-actions">
+      <button class="btn btn-ghost"
+              id="optionsBtn"
+              aria-expanded="false"
+              aria-controls="optionsPanel">
+        Document settings
+      </button>
+      <button class="btn btn-primary"
+              id="exportBtn">Export PDF</button>
+    </div>
+  </header>
+
+  <div class="options-panel"
+       id="optionsPanel"
+       hidden>
+    <div class="options-grid">
+      <label class="field">
+        <span>Title</span>
+        <input type="text"
+               id="docTitle"
+               placeholder="Untitled document"
+               maxlength="120">
+      </label>
+
+      <label class="field">
+        <span>Page size</span>
+        <select id="pageSize">
+          <option value="A4"
+                  selected>A4</option>
+          <option value="Letter">US Letter</option>
+          <option value="Legal">US Legal</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Margins</span>
+        <select id="pageMargin">
+          <option value="narrow">Narrow</option>
+          <option value="normal"
+                  selected>Normal</option>
+          <option value="wide">Wide</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Body text size</span>
+        <select id="fontSize">
+          <option value="15">Small</option>
+          <option value="16"
+                  selected>Default</option>
+          <option value="17.5">Large</option>
+        </select>
+      </label>
+
+      <label class="field field-check">
+        <input type="checkbox"
+               id="pageNumbers"
+               checked>
+        <span>Page numbers</span>
+      </label>
+
+      <label class="field field-check">
+        <input type="checkbox"
+               id="headerTitle">
+        <span>Title in page header</span>
+      </label>
+
+      <label class="field field-check">
+        <input type="checkbox"
+               id="renderMermaid"
+               checked>
+        <span>Render Mermaid diagrams</span>
+      </label>
+    </div>
+  </div>
+
+  <main class="workspace">
+    <section class="pane pane-write is-active"
+             id="paneWrite">
+      <div class="pane-head">
+        <span class="pane-label">Markdown source</span>
+        <div class="pane-head-actions">
+          <button class="btn btn-tiny"
+                  id="sampleBtn">Load sample</button>
+          <button class="btn btn-tiny"
+                  id="uploadBtn">Upload .md</button>
+          <button class="btn btn-tiny btn-tiny-quiet"
+                  id="clearBtn">Clear</button>
+          <input type="file"
+                 id="fileInput"
+                 accept=".md,.markdown,text/markdown,text/plain"
+                 hidden>
+        </div>
+      </div>
+      <div class="editor-shell"
+           id="dropZone">
+        <textarea id="editor"
+                  spellcheck="false"
+                  placeholder="# Start writing…
+
+Paste or type GitHub-flavored Markdown here, or drop a .md file anywhere on this panel."></textarea>
+        <div class="drop-hint"
+             id="dropHint">Drop markdown file to load</div>
+      </div>
+    </section>
+
+    <section class="pane pane-preview"
+             id="panePreview">
+      <div class="pane-head">
+        <span class="pane-label">Preview</span>
+        <span class="pane-sub"
+              id="pageSizeLabel">A4 · Normal margins</span>
+      </div>
+      <div class="preview-scroll">
+        <div class="page"
+             id="page"
+             data-size="A4">
+          <div class="markdown-body"
+               id="pageContent"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <span id="wordCount">0 words</span>
+    <span class="statusbar-sep">·</span>
+    <span>Renders and exports entirely in your browser — nothing is uploaded.</span>
+  </footer>
+
+  <script type="module"
+          src="/src/main.js"></script>
+</body>
+
+</html>
