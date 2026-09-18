@@ -44,6 +44,7 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
   const pageNumbersCheck = document.getElementById("pageNumbers");
   const headerTitleCheck = document.getElementById("headerTitle");
   const renderMermaidCheck = document.getElementById("renderMermaid");
+  const expandLinksCheck = document.getElementById("expandLinks");
 
   const viewToggle = document.getElementById("viewToggle");
   const paneWrite = document.getElementById("paneWrite");
@@ -106,6 +107,21 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
       highlighted = code.replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
     return `<pre><code class="hljs${langClass}">${highlighted}</code></pre>`;
+  };
+
+  renderer.link = function (href, title, text) {
+    let out = `<a href="${href}"`;
+    if (title) out += ` title="${title}"`;
+    out += `>${text}</a>`;
+
+    if (expandLinksCheck.checked && href && !href.startsWith("#")) {
+      const displayHref = href.replace(/^mailto:/, "");
+      const plainText = text.replace(/<[^>]*>/g, "").trim();
+      if (plainText !== displayHref) {
+        out += ` (${escapeHtml(displayHref)})`;
+      }
+    }
+    return out;
   };
 
   marked.setOptions({
@@ -197,6 +213,7 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
   });
 
   renderMermaidCheck.addEventListener("change", renderPreview);
+  expandLinksCheck.addEventListener("change", renderPreview);
 
   viewToggle.addEventListener("click", (e) => {
     const btn = e.target.closest(".view-btn");
@@ -272,6 +289,8 @@ export function retryWithBackoff(fn, attempts = 3) {
 ---
 
 Questions go to [#product-review](https://example.com) on Slack.
+
+Find our product @ [https://example.com](https://example.com)
 `;
 
   sampleBtn.addEventListener("click", () => {
