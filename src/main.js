@@ -110,15 +110,32 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
   };
 
   renderer.link = function (href, title, text) {
-    let out = `<a href="${href}"`;
-    if (title) out += ` title="${title}"`;
-    out += `>${text}</a>`;
+    const displayHref = (href || "").replace(/^mailto:/, "");
+    const plainText = text.replace(/<[^>]*>/g, "").trim();
+
+    // A link that wraps across lines only gets a clickable area on its first
+    // line in the PDF. URL-like links are rendered as an inline-block (see
+    // .link-url) so they form a single box and a single clickable area.
+    const isUrlText = plainText === displayHref || plainText === href;
+    const attrs = (cls) =>
+      `href="${href}"${cls ? ` class="${cls}"` : ""}${title ? ` title="${title}"` : ""}`;
+
+    let out;
+    if (!isUrlText && !text.includes("<") && /\s/.test(text.trim())) {
+      // Plain multi-word link text: one anchor per word, so every line it
+      // wraps onto keeps its own clickable area in the PDF.
+      out = text
+        .trim()
+        .split(/\s+/)
+        .map((word, i, words) => `<a ${attrs()}>${word}${i < words.length - 1 ? " " : ""}</a>`)
+        .join("");
+    } else {
+      out = `<a ${attrs(isUrlText ? "link-url" : "")}>${text}</a>`;
+    }
 
     if (expandLinksCheck.checked && href && !href.startsWith("#")) {
-      const displayHref = href.replace(/^mailto:/, "");
-      const plainText = text.replace(/<[^>]*>/g, "").trim();
-      if (plainText !== displayHref) {
-        out += ` (${escapeHtml(displayHref)})`;
+      if (!isUrlText) {
+        out += ` (<a href="${href}" class="link-url">${escapeHtml(displayHref)}</a>)`;
       }
     }
     return out;
@@ -419,6 +436,7 @@ Find our product @ [https://example.com](https://example.com)
     box-sizing: border-box;
     font-size: ${settings.fontSize}px;
   }
+  .markdown-body a.link-url { display: inline-block; max-width: 100%; overflow-wrap: anywhere; vertical-align: bottom; }
   .markdown-body .mermaid { display: flex; justify-content: center; margin: 20px 0; }
   .markdown-body .mermaid svg { max-width: 100%; height: auto; }
   .export-toolbar {

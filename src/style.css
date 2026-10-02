@@ -381,6 +381,13 @@ textarea {
 }
 
 /* Mermaid diagrams should never overflow the page width */
+.markdown-body a.link-url {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  vertical-align: bottom;
+}
+
 .markdown-body .mermaid {
   display: flex;
   justify-content: center;
