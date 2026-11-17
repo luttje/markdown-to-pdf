@@ -192,6 +192,40 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
     mermaidReady = true;
   }
 
+  // A PDF can't be clicked open, so <details> are always shown expanded. They
+  // become plain <div>s rather than just getting `open`: when Paged.js splits
+  // a <details> across pages, the continuation has no <summary>, and the
+  // browser would draw a default "Details" label at the top of it.
+  function expandDetails(root) {
+    // Document order, so outer boxes are rebuilt first; nested <details> are
+    // moved (not copied) into them and are still converted later in the loop.
+    root.querySelectorAll("details").forEach((details) => {
+      const box = document.createElement("div");
+      box.className = "details";
+
+      const summaryEl = Array.from(details.children).find((el) => el.tagName === "SUMMARY");
+      const summary = document.createElement("div");
+      summary.className = "details-summary";
+      if (summaryEl) {
+        summary.append(...summaryEl.childNodes);
+        summaryEl.remove();
+      } else {
+        summary.textContent = "Details"; // what browsers show without a <summary>
+      }
+      box.append(summary);
+
+      const rest = Array.from(details.childNodes);
+      if (rest.some((n) => n.nodeType === Node.ELEMENT_NODE || n.textContent.trim())) {
+        const content = document.createElement("div");
+        content.className = "details-content";
+        content.append(...rest);
+        box.append(content);
+      }
+
+      details.replaceWith(box);
+    });
+  }
+
   let renderToken = 0;
 
   // Renders the Markdown (and Mermaid diagrams) into the off-screen staging
@@ -203,6 +237,7 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
     const clean = DOMPurify.sanitize(html, purifyConfig);
     pageContent.innerHTML = clean;
     pageContent.style.fontSize = fontSizeSelect.value + "px";
+    expandDetails(pageContent); // before Mermaid, so diagrams inside can be measured
 
     if (renderMermaidCheck.checked) {
       const blocks = pageContent.querySelectorAll("div.mermaid");
@@ -437,12 +472,22 @@ A short reference document showing the GitHub-flavored Markdown this tool unders
 - [ ] Schedule the cutover window
 - [ ] Post the retro notes
 
+\\pagebreak
+
 ## A note on rollout
 
 > We are rolling this out to 10% of accounts before the full release, watching
 > error budgets closely for the first 48 hours.
 
-\\pagebreak
+<details>
+<summary>Rollback plan</summary>
+
+Collapsible sections are always printed expanded.
+
+1. Flip the \`onboarding_v2\` flag off
+2. Confirm traffic is back on the old flow
+
+</details>
 
 ## Release flow
 
@@ -662,6 +707,51 @@ Find our product @ [https://example.com](https://example.com)
   .markdown-body .mermaid { display: flex; justify-content: center; margin: 20px 0; }
   .markdown-body .mermaid svg { max-width: 100%; height: auto; }
   .markdown-body .page-break { break-after: page; height: 0; margin: 0; }
+  .markdown-body .details {
+    margin: 0 0 16px;
+    border: 1px solid #d1d9e0;
+    border-radius: 6px;
+  }
+  .markdown-body .details-summary {
+    position: relative;
+    padding: 8px 16px 8px 36px;
+    font-weight: 600;
+    background: #f6f8fa;
+    border-bottom: 1px solid #d1d9e0;
+    border-radius: 5px 5px 0 0;
+    break-after: avoid;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .markdown-body .details-summary:last-child { border-bottom: 0; border-radius: 5px; }
+  /* Downward chevron: the "expanded" disclosure marker. */
+  .markdown-body .details-summary::before {
+    content: "";
+    position: absolute;
+    left: 16px;
+    top: calc(8px + 0.75em - 5px);
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid #59636e;
+    border-bottom: 1.5px solid #59636e;
+    transform: rotate(45deg);
+  }
+  .markdown-body .details-summary > :first-child,
+  .markdown-body .details-content > :first-child { margin-top: 0; }
+  .markdown-body .details-summary > :last-child,
+  .markdown-body .details-content > :last-child { margin-bottom: 0; }
+  .markdown-body .details-content { padding: 12px 16px; }
+  /* Split across pages by Paged.js: leave the box open at the page break. */
+  .markdown-body .details[data-split-to] {
+    border-bottom: 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .markdown-body .details[data-split-from] {
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
   ${modeCss}
   ${pageCss}
 </style>
