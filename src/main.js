@@ -22,7 +22,6 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
 
   const editor = document.getElementById("editor");
   const pageContent = document.getElementById("pageContent");
-  const page = document.getElementById("page");
   const dropZone = document.getElementById("dropZone");
   const dropHint = document.getElementById("dropHint");
   const wordCount = document.getElementById("wordCount");
@@ -49,6 +48,8 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
   const viewToggle = document.getElementById("viewToggle");
   const paneWrite = document.getElementById("paneWrite");
   const panePreview = document.getElementById("panePreview");
+  const previewFrames = document.getElementById("previewFrames");
+  const previewStatus = document.getElementById("previewStatus");
 
   const renderer = new Renderer();
 
@@ -147,6 +148,30 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
     renderer: renderer,
   });
 
+  // `\pagebreak` on a line of its own forces the following content onto a new
+  // page. `start` lets the marker interrupt a paragraph without a blank line
+  // before it; fenced and indented code blocks are tokenized before this ever
+  // sees their contents, so a literal `\pagebreak` in code is left alone.
+  const PAGEBREAK_RE = /^ {0,3}\\pagebreak[ \t]*(?:\r?\n|$)/;
+  marked.use({
+    extensions: [
+      {
+        name: "pagebreak",
+        level: "block",
+        start(src) {
+          return src.match(/^ {0,3}\\pagebreak[ \t]*$/m)?.index;
+        },
+        tokenizer(src) {
+          const match = PAGEBREAK_RE.exec(src);
+          if (match) return { type: "pagebreak", raw: match[0] };
+        },
+        renderer() {
+          return '<div class="page-break"></div>\n';
+        },
+      },
+    ],
+  });
+
   const purifyConfig = {
     ADD_TAGS: ["input", "svg", "path"],
     ADD_ATTR: [
@@ -169,12 +194,15 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
 
   let renderToken = 0;
 
-  async function renderPreview() {
+  // Renders the Markdown (and Mermaid diagrams) into the off-screen staging
+  // element. Resolves to false if a newer render superseded this one.
+  async function renderContent() {
     const myToken = ++renderToken;
     const raw = editor.value;
     const html = marked.parse(raw);
     const clean = DOMPurify.sanitize(html, purifyConfig);
     pageContent.innerHTML = clean;
+    pageContent.style.fontSize = fontSizeSelect.value + "px";
 
     if (renderMermaidCheck.checked) {
       const blocks = pageContent.querySelectorAll("div.mermaid");
@@ -188,9 +216,15 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
       }
     }
 
-    if (myToken !== renderToken) return; // a newer render started; drop this one
+    if (myToken !== renderToken) return false; // a newer render started; drop this one
 
     updateWordCount(raw);
+    return true;
+  }
+
+  async function renderPreview() {
+    markPreviewStale();
+    if (await renderContent()) paginatePreview();
   }
 
   function updateWordCount(raw) {
@@ -199,29 +233,157 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
   }
 
   let debounceHandle = null;
-  editor.addEventListener("input", () => {
+  function scheduleRender(fn) {
+    // Flag the preview as out of date right away, not when the debounce fires,
+    // so the indicator appears as soon as the user starts typing.
+    markPreviewStale();
     clearTimeout(debounceHandle);
-    debounceHandle = setTimeout(renderPreview, 200);
-  });
+    debounceHandle = setTimeout(fn, 250);
+  }
+
+  editor.addEventListener("input", () => scheduleRender(renderPreview));
 
   const MARGINS_MM = { narrow: 12, normal: 20, wide: 30 };
 
-  function applySettingsToPreview() {
-    const size = pageSizeSelect.value;
-    const margin = pageMarginSelect.value;
-    const fontSize = fontSizeSelect.value;
-
-    page.setAttribute("data-size", size);
-    page.setAttribute("data-margin", margin);
-    pageContent.style.fontSize = fontSize + "px";
-
-    const marginLabel = margin.charAt(0).toUpperCase() + margin.slice(1);
-    pageSizeLabel.textContent = `${size} · ${marginLabel} margins`;
+  function currentSettings() {
+    return {
+      title: docTitleInput.value.trim() || "Untitled document",
+      size: pageSizeSelect.value,
+      margin: pageMarginSelect.value,
+      fontSize: fontSizeSelect.value,
+      pageNumbers: pageNumbersCheck.checked,
+      headerTitle: headerTitleCheck.checked,
+    };
   }
 
-  [pageSizeSelect, pageMarginSelect, fontSizeSelect].forEach((el) =>
-    el.addEventListener("change", applySettingsToPreview)
+  let previewPageCount = null;
+
+  function updatePageLabel() {
+    const margin = pageMarginSelect.value;
+    const marginLabel = margin.charAt(0).toUpperCase() + margin.slice(1);
+    let label = `${pageSizeSelect.value} · ${marginLabel} margins`;
+    if (previewPageCount === "error") {
+      label += " · preview unavailable";
+    } else if (previewPageCount !== null) {
+      label += ` · ${previewPageCount} page${previewPageCount === 1 ? "" : "s"}`;
+    }
+    pageSizeLabel.textContent = label;
+  }
+
+  // ---- Paginated preview ---------------------------------------------------
+  //
+  // Each update builds the same Paged.js document the export uses and loads it
+  // into a fresh, hidden iframe. Once Paged.js reports it has finished laying
+  // out the pages, that frame replaces the visible one (keeping the scroll
+  // position), so the preview always matches what the PDF will look like.
+
+  const PREVIEW_GUTTER_PX = 24;
+  const PREVIEW_GUTTER_COLOR = "#d6d6d3"; // keep in sync with .preview-frame in style.css
+  let activeFrame = null;
+  let previewToken = 0;
+  let previewDirty = true;
+
+  // Out-of-sync tracking: every change bumps `syncGeneration`; each preview
+  // frame remembers the generation it was built for. The preview is in sync
+  // only when the frame on screen was built for the latest generation.
+  let syncGeneration = 0;
+
+  function markPreviewStale() {
+    syncGeneration++;
+    previewFrames.classList.add("is-stale");
+    previewStatus.setAttribute("aria-hidden", "false");
+  }
+
+  function markPreviewSynced() {
+    previewFrames.classList.remove("is-stale");
+    previewStatus.setAttribute("aria-hidden", "true");
+  }
+
+  function isPreviewVisible() {
+    return previewFrames.clientWidth > 0 && previewFrames.clientHeight > 0;
+  }
+
+  function paginatePreview() {
+    markPreviewStale();
+
+    // Paged.js needs real layout. If the preview pane is hidden (the mobile
+    // "Write" tab), wait until it is shown; the ResizeObserver below picks
+    // that up.
+    if (!isPreviewVisible()) {
+      previewDirty = true;
+      return;
+    }
+    previewDirty = false;
+
+    const token = ++previewToken;
+    previewFrames.querySelectorAll(".preview-frame.is-pending").forEach((f) => f.remove());
+
+    const frame = document.createElement("iframe");
+    frame.className = "preview-frame is-pending";
+    frame.title = "Page preview";
+    frame.dataset.token = String(token);
+    frame.dataset.generation = String(syncGeneration);
+    previewFrames.appendChild(frame);
+    frame.srcdoc = buildDocumentHtml(currentSettings(), pageContent.innerHTML, "preview");
+  }
+
+  function fitFrameToWidth(frame) {
+    const doc = frame.contentDocument;
+    const pages = doc && doc.querySelector(".pagedjs_pages");
+    const firstPage = pages && pages.querySelector(".pagedjs_page");
+    if (!firstPage) return;
+    const available = doc.documentElement.clientWidth - PREVIEW_GUTTER_PX * 2;
+    const scale = Math.min(1, available / firstPage.offsetWidth);
+    pages.style.zoom = String(Math.max(scale, 0.1));
+  }
+
+  window.addEventListener("message", (e) => {
+    const data = e.data;
+    if (!data || typeof data.type !== "string" || !data.type.startsWith("md2pdf:")) return;
+
+    const frame = Array.from(previewFrames.querySelectorAll(".preview-frame")).find(
+      (f) => f.contentWindow === e.source
+    );
+    if (!frame || Number(frame.dataset.token) !== previewToken) return; // stale
+
+    if (data.type === "md2pdf:paged-error") {
+      frame.remove();
+      markPreviewSynced(); // nothing more is coming; don't spin forever
+      previewPageCount = "error";
+      updatePageLabel();
+      return;
+    }
+    if (data.type !== "md2pdf:paged") return;
+
+    const scrollTop = activeFrame ? activeFrame.contentWindow.scrollY : 0;
+    fitFrameToWidth(frame);
+    frame.contentWindow.scrollTo(0, scrollTop);
+    frame.classList.remove("is-pending");
+    if (activeFrame && activeFrame !== frame) activeFrame.remove();
+    activeFrame = frame;
+    if (Number(frame.dataset.generation) === syncGeneration) markPreviewSynced();
+
+    previewPageCount = frame.contentDocument.querySelectorAll(".pagedjs_page").length;
+    updatePageLabel();
+  });
+
+  new ResizeObserver(() => {
+    if (!isPreviewVisible()) return;
+    if (previewDirty) paginatePreview();
+    else if (activeFrame) fitFrameToWidth(activeFrame);
+  }).observe(previewFrames);
+
+  // Page geometry / header & footer settings only affect pagination, so they
+  // don't need the Markdown re-parsed.
+  [pageSizeSelect, pageMarginSelect, fontSizeSelect, pageNumbersCheck, headerTitleCheck].forEach((el) =>
+    el.addEventListener("change", () => {
+      updatePageLabel();
+      paginatePreview();
+    })
   );
+  docTitleInput.addEventListener("input", () => {
+    if (headerTitleCheck.checked) scheduleRender(paginatePreview);
+  });
 
   optionsBtn.addEventListener("click", () => {
     const isOpen = !optionsPanel.hidden;
@@ -279,6 +441,8 @@ A short reference document showing the GitHub-flavored Markdown this tool unders
 
 > We are rolling this out to 10% of accounts before the full release, watching
 > error budgets closely for the first 48 hours.
+
+\\pagebreak
 
 ## Release flow
 
@@ -406,39 +570,52 @@ Find our product @ [https://example.com](https://example.com)
     return css;
   }
 
-  async function exportPdf() {
-    // Make sure the preview reflects the latest edits and mermaid diagrams
-    // have finished rendering before we copy it into the export document.
-    await renderPreview();
-
-    const settings = {
-      title: docTitleInput.value.trim() || "Untitled document",
-      size: pageSizeSelect.value,
-      margin: pageMarginSelect.value,
-      fontSize: fontSizeSelect.value,
-      pageNumbers: pageNumbersCheck.checked,
-      headerTitle: headerTitleCheck.checked,
-    };
-
-    const bodyHtml = pageContent.innerHTML;
+  // Builds the standalone Paged.js document used both for the in-app page
+  // preview (mode "preview") and for the export window (mode "export"). Both
+  // share the exact same page CSS so the preview matches the PDF.
+  function buildDocumentHtml(settings, bodyHtml, mode) {
+    const isPreview = mode === "preview";
     const pageCss = buildPageCss(settings);
 
-    const doc = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>${escapeHtml(settings.title)}</title>
-<style>
-  ${githubMarkdownCssText}
-  ${hljsThemeCssText}
-  html, body { margin: 0; padding: 0; background: #fff; }
-  .markdown-body {
-    box-sizing: border-box;
-    font-size: ${settings.fontSize}px;
+    if (isPreview && !bodyHtml.trim()) {
+      bodyHtml = '<p class="preview-placeholder">Your document will appear here.</p>';
+    }
+
+    // The export prints as soon as pagination finishes; the preview instead
+    // tells the app it's ready to be shown.
+    const afterPaged = isPreview
+      ? 'window.parent.postMessage({ type: "md2pdf:paged" }, "*");'
+      : "setTimeout(function () { window.print(); }, 150);";
+    const pagedErrorHandler = isPreview
+      ? ` onerror="window.parent.postMessage({ type: 'md2pdf:paged-error' }, '*')"`
+      : "";
+
+    // Preview-only chrome (grey gutter, page shadows). It lives in a
+    // media="screen" <style>, which Paged.js leaves out of its processing
+    // (it drops screen-only rules from the stylesheets it does process).
+    // !important beats the processed `html, body { background: #fff }`,
+    // which Paged.js re-inserts later in <head>.
+    const screenStyle = isPreview
+      ? `<style media="screen">
+  html, body { background: ${PREVIEW_GUTTER_COLOR} !important; }
+  body { padding: ${PREVIEW_GUTTER_PX}px ${PREVIEW_GUTTER_PX}px 60px !important; }
+  .pagedjs_page {
+    background: #fff;
+    margin: 0 auto ${PREVIEW_GUTTER_PX}px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.18);
   }
-  .markdown-body a.link-url { display: inline-block; max-width: 100%; overflow-wrap: anywhere; vertical-align: bottom; }
-  .markdown-body .mermaid { display: flex; justify-content: center; margin: 20px 0; }
-  .markdown-body .mermaid svg { max-width: 100%; height: auto; }
+</style>`
+      : "";
+
+    const modeCss = isPreview
+      ? `
+  .preview-placeholder {
+    color: #9a9d9f;
+    font-family: Fraunces, Georgia, serif;
+    font-style: italic;
+    font-size: 19px;
+  }`
+      : `
   .export-toolbar {
     position: fixed;
     top: 12px;
@@ -459,28 +636,60 @@ Find our product @ [https://example.com](https://example.com)
   }
   @media print {
     .export-toolbar { display: none; }
-  }
-  ${pageCss}
-</style>
-</head>
-<body>
-  <div class="export-toolbar no-print">
+  }`;
+
+    const toolbar = isPreview
+      ? ""
+      : `<div class="export-toolbar no-print">
     <button onclick="window.print()">Print / Save as PDF</button>
     <button onclick="window.close()">Close</button>
-  </div>
+  </div>`;
+
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(settings.title)}</title>
+<style>
+  ${githubMarkdownCssText}
+  ${hljsThemeCssText}
+  html, body { margin: 0; padding: 0; background: #fff; }
+  .markdown-body {
+    box-sizing: border-box;
+    font-size: ${settings.fontSize}px;
+  }
+  .markdown-body a.link-url { display: inline-block; max-width: 100%; overflow-wrap: anywhere; vertical-align: bottom; }
+  .markdown-body .mermaid { display: flex; justify-content: center; margin: 20px 0; }
+  .markdown-body .mermaid svg { max-width: 100%; height: auto; }
+  .markdown-body .page-break { break-after: page; height: 0; margin: 0; }
+  ${modeCss}
+  ${pageCss}
+</style>
+${screenStyle}
+</head>
+<body>
+  ${toolbar}
   <div class="markdown-body">${bodyHtml}</div>
 
   <script>
     window.PagedConfig = {
       auto: true,
       after: function () {
-        setTimeout(function () { window.print(); }, 150);
+        ${afterPaged}
       }
     };
   <\/script>
-  <script src="${new URL(pagedJsUrl, window.location.href).href}"><\/script>
+  <script src="${new URL(pagedJsUrl, window.location.href).href}"${pagedErrorHandler}><\/script>
 </body>
 </html>`;
+  }
+
+  async function exportPdf() {
+    // Make sure the latest edits and mermaid diagrams have finished rendering
+    // before we copy them into the export document.
+    await renderContent();
+
+    const doc = buildDocumentHtml(currentSettings(), pageContent.innerHTML, "export");
 
     const win = window.open("", "_blank");
     if (!win) {
@@ -502,7 +711,7 @@ Find our product @ [https://example.com](https://example.com)
     });
   });
 
-  applySettingsToPreview();
+  updatePageLabel();
   editor.value = SAMPLE_MD;
   renderPreview();
 })();

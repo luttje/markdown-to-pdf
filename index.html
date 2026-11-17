@@ -161,16 +161,25 @@ Paste or type GitHub-flavored Markdown here, or drop a .md file anywhere on this
         <span class="pane-sub"
               id="pageSizeLabel">A4 · Normal margins</span>
       </div>
-      <div class="preview-scroll">
-        <div class="page"
-             id="page"
-             data-size="A4">
-          <div class="markdown-body"
-               id="pageContent"></div>
+      <div class="preview-frames is-stale"
+           id="previewFrames">
+        <div class="preview-status"
+             id="previewStatus"
+             aria-hidden="false">
+          <span class="preview-spinner"></span>
+          Updating preview…
         </div>
       </div>
     </section>
   </main>
+
+  <!-- Off-screen staging area: Markdown (and Mermaid diagrams) are rendered
+       here first, then copied into the paginated preview and the export. -->
+  <div class="render-staging"
+       aria-hidden="true">
+    <div class="markdown-body"
+         id="pageContent"></div>
+  </div>
 
   <footer class="statusbar">
     <span id="wordCount">0 words</span>
