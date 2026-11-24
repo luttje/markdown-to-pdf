@@ -142,6 +142,20 @@ const pagedJsUrl = "https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js";
     return out;
   };
 
+  // Task list items (- [ ] / - [x]). A native <input type="checkbox"> renders
+  // greyed-out (it's disabled) and sits awkwardly next to the bullet, so we
+  // draw our own box and let it take the bullet's place (see .task-checkbox).
+  const TASK_CHECKBOX_RE = /(<span class="task-checkbox[^"]*"><\/span>)\s+/;
+  renderer.checkbox = function (checked) {
+    return `<span class="task-checkbox${checked ? " is-checked" : ""}"></span>`;
+  };
+  renderer.listitem = function (text, task) {
+    if (!task) return `<li>${text}</li>\n`;
+    // marked puts whitespace after the checkbox; drop it so wrapped lines and the
+    // first line start at the same indent.
+    return `<li class="task-list-item">${text.replace(TASK_CHECKBOX_RE, "$1")}</li>\n`;
+  };
+
   marked.setOptions({
     gfm: true,
     breaks: false,
@@ -707,6 +721,28 @@ Find our product @ [https://example.com](https://example.com)
   .markdown-body .mermaid { display: flex; justify-content: center; margin: 20px 0; }
   .markdown-body .mermaid svg { max-width: 100%; height: auto; }
   .markdown-body .page-break { break-after: page; height: 0; margin: 0; }
+  /* Task lists: the checkbox replaces the bullet, hanging in the list's
+     indent. Its advance is zero (width + margins), so wrapped lines line up
+     with the first line's text. */
+  .markdown-body .task-list-item { list-style: none; }
+  .markdown-body .task-checkbox {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 0.95em;
+    height: 0.95em;
+    margin: 0 0.55em 0 -1.5em;
+    vertical-align: -0.15em;
+    border: 1.5px solid #424a53;
+    border-radius: 0.2em;
+    background: #fff no-repeat center / 80%;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .markdown-body .task-checkbox.is-checked {
+    border-color: #0969da;
+    background-color: #0969da;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
   .markdown-body .details {
     margin: 0 0 16px;
     border: 1px solid #d1d9e0;
